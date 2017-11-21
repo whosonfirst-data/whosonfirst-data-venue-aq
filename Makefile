@@ -2,28 +2,50 @@
 # 1. Variables at the top of the Makefile.
 # 2. Targets are listed alphabetically. No, really.
 
-WHOAMI = $(shell basename `pwd`)
+WHEREAMI = $(shell pwd)
+WHOAMI = $(shell basename $(WHEREAMI))
+WHATAMI = $(shell echo $(WHOAMI) | awk -F '-' '{print $$3}')
+WHATAMI_REALLY = $(shell basename `pwd` | sed 's/whosonfirst-data-//')
+
 YMD = $(shell date "+%Y%m%d")
 
-# https://github.com/whosonfirst/go-whosonfirst-utils/blob/master/cmd/wof-expand.go
-WOF_EXPAND = $(shell which wof-expand)
+UNAME_S := $(shell uname -s)
 
-archive:
+archive: meta-scrub
 	tar --exclude='.git*' --exclude='Makefile*' -cvjf $(dest)/$(WHOAMI)-$(YMD).tar.bz2 ./data ./meta ./LICENSE.md ./CONTRIBUTING.md ./README.md
 
-bundles:
-	echo "please write me"
+bin:
+	mkdir -p bin
+ifeq ($(UNAME_S),Darwin)
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/darwin/wof-build-metafiles
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/darwin/wof-build-metafiles.sha256
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/darwin/wof-build-concordances
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/darwin/wof-build-concordances.sha256
+	make bin-verify
+else ifeq ($(UNAME_S),Linux)
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/linux/wof-build-metafiles
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/linux/wof-build-metafiles.sha256
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/linux/wof-build-concordances
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/linux/wof-build-concordances.sha256
+	make bin-verify
+else ifeq ($(UNAME_S),Windows)
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/windows/wof-build-metafiles
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-meta/master/dist/windows/wof-build-metafiles.sha256
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/windows/wof-build-concordances
+	cd bin && curl -s -O https://raw.githubusercontent.com/whosonfirst/go-whosonfirst-concordances/master/dist/windows/wof-build-concordances.sha256
+	@echo "Skipping the SHA-256 verification, because Windows"
+else
+	echo "this OS is not supported yet"
+	exit 1
+endif
 
-# https://github.com/whosonfirst/go-whosonfirst-concordances
-# Note: this does not bother to check whether the newly minted
-# `wof-concordances-tmp.csv` file is the same as any existing
-# `wof-concordances-latest.csv` file. It should but it doesn't.
-# (20160420/thisisaaronland)
-
-concordances:
-	wof-concordances-write -processes 100 -source ./data > meta/wof-concordances-tmp.csv
-	mv meta/wof-concordances-tmp.csv meta/wof-concordances-$(YMD).csv
-	cp meta/wof-concordances-$(YMD).csv meta/wof-concordances-latest.csv
+bin-verify:
+	cd bin && shasum -a 256 -c wof-build-metafiles.sha256
+	cd bin && shasum -a 256 -c wof-build-concordances.sha256
+	chmod +x bin/wof-build-metafiles
+	chmod +x bin/wof-build-concordances
+	rm bin/wof-build-metafiles.sha256
+	rm bin/wof-build-concordances.sha256
 
 count:
 	find ./data -name '*.geojson' -print | wc -l
@@ -32,9 +54,26 @@ docs:
 	curl -s -o LICENSE.md https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/docs/LICENSE-SHORT.md
 	curl -s -o CONTRIBUTING.md https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/docs/CONTRIBUTING.md
 
+githash:
+	git log --pretty=format:'%H' -n 1
+
 gitignore:
-	mv .gitignore .gitignore.$(YMD)
-	curl -s -o .gitignore https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/git/.gitignore
+	curl -s -o .gitignore https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/git/dot-gitignore
+	curl -s -o meta/.gitignore https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/git/dot-gitignore-meta
+
+gitlf:
+	if ! test -f .gitattributes; then touch .gitattributes; fi
+ifeq ($(shell grep '*.geojson text eol=lf' .gitattributes | wc -l), 0)
+	cp .gitattributes .gitattributes.tmp
+	perl -pe 'chomp if eof' .gitattributes.tmp
+	echo "*.geojson text eol=lf" >> .gitattributes.tmp
+	mv .gitattributes.tmp .gitattributes
+else
+	@echo "Git linefeed hoohah already set"
+endif
+
+gitlfs-track-meta:
+	git-lfs track meta/*-latest.csv
 
 # https://internetarchive.readthedocs.org/en/latest/cli.html#upload
 # https://internetarchive.readthedocs.org/en/latest/quickstart.html#configuring
@@ -50,57 +89,16 @@ internetarchive:
 list-empty:
 	find data -type d -empty -print
 
-makefile:
-	mv Makefile Makefile.$(YMD)
-	curl -s -o Makefile https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/make/Makefile
-
-postbuffer:
-	git config http.postBuffer 104857600
-
-# As in this: https://github.com/whosonfirst/git-whosonfirst-data
-
-post-pull:
-	./.git/hooks/pre-commit --start-commit $(commit)
-	./.git/hooks/post-commit --start-commit $(commit)
-	./.git/hooks/post-push-async --start-commit $(commit)
-
 prune:
 	git gc --aggressive --prune
 
 rm-empty:
 	find data -type d -empty -print -delete
 
-setup:
-	# Running one-time setup tasks...
-	# --------
-	# Configure the repository to disable oh-my-zsh’s Git status integration,
-	# which performs poorly when working with large repos.
-	# See: http://stackoverflow.com/questions/12765344/oh-my-zsh-slow-but-only-for-certain-git-repo
-	git config --add oh-my-zsh.hide-status 1
-	# --------
-	# Okay, all done with setup!
-
-# https://github.com/whosonfirst/py-mapzen-whosonfirst-search
-# Note that this does not try to be at all intelligent. It is a 
-# straight clone in to ES for every record.
-# (20160421/thisisaaronland)
-
-sync-es:
-	wof-es-index --source data --bulk --host $(host)
-
-# https://github.com/whosonfirst/go-whosonfirst-s3
-# Note that this does not try to be especially intelligent. It is a 
-# straight clone with only minimal HEAD/lastmodified checks
-# (20160421/thisisaaronland)
-
-sync-s3:
-	wof-sync-dirs -root data -bucket whosonfirst.mapzen.com -prefix data -processes 64
-
-wof-less:
-	less `$(WOF_EXPAND) -prefix data $(id)`
-
-wof-open:
-	$(EDITOR) `$(WOF_EXPAND) -prefix data $(id)`
-
-wof-path:
-	$(WOF_EXPAND) -prefix data $(id)
+update-makefile:
+	curl -s -o Makefile https://raw.githubusercontent.com/whosonfirst/whosonfirst-data-utils/master/make/Makefile
+ifeq ($(shell echo $(WHATAMI) | wc -l), 1)
+	if test -f $(WHEREAMI)/Makefile.$(WHATAMI);then  echo "\n# appending Makefile.$(WHATAMI)\n\n" >> Makefile; cat $(WHEREAMI)/Makefile.$(WHATAMI) >> Makefile; fi
+	if test -f $(WHEREAMI)/Makefile.$(WHATAMI).local;then  echo "\n# appending Makefile.$(WHATAMI).local\n\n" >> Makefile; cat $(WHEREAMI)/Makefile.$(WHATAMI).local >> Makefile; fi
+endif
+	if test -f $(WHEREAMI)/Makefile.local; then echo "\n# appending Makefile.local\n\n" >> Makefile; cat $(WHEREAMI)/Makefile.local >> Makefile; fi
